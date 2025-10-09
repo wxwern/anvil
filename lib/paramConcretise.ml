@@ -87,27 +87,27 @@ let concretise_proc param_values proc =
   else (
     let (int_param_env, type_param_env) = build_param_envs param_values proc.params in
     let args = List.map
-      (fun ({d = a; span} : endpoint_def ast_node) ->
+      (fun ({d = a; span; def_span} : endpoint_def ast_node) ->
         let params = concretise_params int_param_env type_param_env a.channel_params in
-        {d = {a with channel_params = params}; span}
+        {d = {a with channel_params = params}; span; def_span}
       ) proc.args in
     (
       match proc.body with
       | Extern _ -> proc
       | Native body ->
         let regs = List.map
-          (fun {d = r; span} -> {d = {r with dtype = concretise_dtype_params int_param_env type_param_env r.dtype}; span})
+          (fun {d = r; span; def_span} -> {d = {r with dtype = concretise_dtype_params int_param_env type_param_env r.dtype}; span; def_span})
           body.regs in
         let spawns = List.map
-          (fun {d = sp; span} ->
+          (fun {d = sp; span; def_span} ->
             let compile_params = concretise_params int_param_env type_param_env sp.compile_params in
-            {d = {sp with compile_params}; span}
+            {d = {sp with compile_params}; span; def_span}
           )
           body.spawns in
         let channels = List.map
-          (fun {d = ch; span} ->
+          (fun {d = ch; span; def_span} ->
             let params = concretise_params int_param_env type_param_env ch.channel_params in
-            {d = {ch with channel_params = params}; span}
+            {d = {ch with channel_params = params}; span; def_span}
           )
           body.channels in
         {proc with args; body = Native {body with regs; spawns; channels}}

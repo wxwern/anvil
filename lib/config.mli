@@ -10,6 +10,7 @@ type compile_config = {
                              NOTE: with general recursive graphs, this may not be
                              literally two rounds *)
   json_output : bool; (** output compilation results in JSON format *)
+  ast_output : bool; (** output parsed AST in JSON format *)
   input_filenames : string list; (** list of file names to be compiled *)
 }
 

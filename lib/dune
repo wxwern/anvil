@@ -7,4 +7,5 @@
  (name anvil)
  (public_name anvil)
  (libraries yojson)
+(preprocess (pps ppx_deriving_yojson))
 )

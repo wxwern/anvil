@@ -81,7 +81,7 @@ let create (channels : channel_def ast_node list)
         ])
   in
   (* override the user-specified foreign in args *)
-  let args = List.map (fun ({d = ep; span} : endpoint_def ast_node) -> ({ep with foreign = get_foreign ep.name}, span)) args in
+  let args = List.map (fun ({d = ep; span; def_span = _} : endpoint_def ast_node) -> ({ep with foreign = get_foreign ep.name}, span)) args in
   let local_messages = List.filter (fun ((p, _) : endpoint_def * code_span) -> not p.foreign) (args @ endpoints) |>
   List.concat_map gather_from_endpoint in
   {endpoints = List.map fst endpoints; args = List.map fst args; local_messages}

@@ -119,11 +119,11 @@ cunit:
 import_directive:
 | KEYWORD_IMPORT; file_name = STR_LITERAL
   {
-    let open Lang in {file_name; is_extern = false}
+    let open Lang in {file_name; is_extern = false; span = {st = $startpos; ed = $endpos}}
   }
 | KEYWORD_EXTERN; KEYWORD_IMPORT; file_name = STR_LITERAL
   {
-    let open Lang in {file_name; is_extern = true}
+    let open Lang in {file_name; is_extern = true; span = {st = $startpos; ed = $endpos}}
   }
 ;
 
@@ -137,6 +137,7 @@ proc_def:
       name = ident;
       args = args;
       params = [];
+      span = {st = $startpos; ed = $endpos};
       body = let open Lang in Native body
     } : Lang.proc_def
   }
@@ -148,7 +149,8 @@ proc_def:
       name = ident;
       args = args;
       params = params;
-      body = let open Lang in Native body
+      span = {st = $startpos; ed = $endpos};
+      body = let open Lang in Native body;
     } : Lang.proc_def
   }
 | KEYWORD_PROC; ident = IDENT; LEFT_PAREN; args = proc_def_arg_list; RIGHT_PAREN;
@@ -159,6 +161,7 @@ proc_def:
       name = ident;
       args = args;
       params = [];
+      span = {st = $startpos; ed = $endpos};
       body = let open Lang in Extern (mod_name, body)
     } : Lang.proc_def
   }
@@ -238,17 +241,17 @@ type_def:
 | KEYWORD_TYPE; name = IDENT; params = param_list?;
   EQUAL; dtype = data_type; SEMICOLON
   {
-    { name = name; body = dtype; params = Option.value ~default:[] params } : Lang.type_def
+    { name = name; body = dtype; params = Option.value ~default:[] params; span = {st = $startpos; ed = $endpos} } : Lang.type_def
   }
 | KEYWORD_ENUM; name = IDENT; params = param_list?;
   LEFT_BRACE; variants = separated_nonempty_list(COMMA, variant_def); RIGHT_BRACE
   {
-    { name = name; body = `Variant variants; params = Option.value ~default:[] params } : Lang.type_def
+    { name = name; body = `Variant variants; params = Option.value ~default:[] params; span = {st = $startpos; ed = $endpos} } : Lang.type_def
   }
 | KEYWORD_STRUCT; name = IDENT; params = param_list?;
   LEFT_BRACE; fields = separated_nonempty_list(COMMA, field_def); RIGHT_BRACE
   {
-    { name = name; body = `Record (List.rev fields); params = Option.value ~default:[] params } : Lang.type_def
+    { name = name; body = `Record (List.rev fields); params = Option.value ~default:[] params; span = {st = $startpos; ed = $endpos} } : Lang.type_def
   }
 ;
 
@@ -820,13 +823,13 @@ shared_var_def:
 macro_def:
   | KEYWORD_CONST; id = IDENT; EQUAL; value = INT; SEMICOLON
     {
-      { id = id; value = value } : Lang.macro_def
+      { id = id; value = value; span = {st = $startpos; ed = $endpos} } : Lang.macro_def
     }
 ;
 
 function_def:
   | KEYWORD_FUNCTION; name = IDENT; LEFT_PAREN; args = separated_list(COMMA, IDENT); RIGHT_PAREN; LEFT_BRACE; body = node(expr); RIGHT_BRACE
     {
-      { name = name; args = args; body = body } : Lang.func_def
+      { name = name; args = args; body = body; span = {st = $startpos; ed = $endpos} } : Lang.func_def
     }
 ;

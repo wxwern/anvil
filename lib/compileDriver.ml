@@ -53,7 +53,7 @@ let rec parse_recursive cunits parsed_files (config : Config.compile_config) fil
           raise_compile_error (Some filename) [Except.Text msg]
     in
     let cunit = {cunit with cunit_file_name = Some filename} in
-    (
+    if not config.ast_output then ( (* only do type checks if we're not just outputting AST *)
       try
         GraphBuilder.syntax_tree_precheck config cunit
       with
@@ -68,7 +68,7 @@ let rec parse_recursive cunits parsed_files (config : Config.compile_config) fil
     ) cunit.imports
   )
 
-let compile out config =
+let _parse config =
   let open Config in
   let toplevel_filename = if config.stdin && List.length config.input_filenames = 0
     then "-"
@@ -82,12 +82,16 @@ let compile out config =
         (Except.Text "Type error:")::msg
           |> raise_compile_error None
   );
+  !cunits
+
+(* performs graph checks and returns the graph collection queue *)
+let _check config cunits =
   (* collect all channel class and type definitions *)
-  let all_channel_classes = List.concat_map (fun (_, cunit) -> let open Lang in cunit.channel_classes) !cunits in
-  let all_type_defs = List.concat_map (fun (_, cunit) -> let open Lang in cunit.type_defs) !cunits in
-  let all_procs = List.concat_map (fun (file_name, cunit) -> let open Lang in List.map (fun p -> (file_name, p)) cunit.procs) !cunits in
-  let all_func_defs = List.concat_map (fun (_, cunit) -> let open Lang in cunit.func_defs) !cunits in
-  let all_macro_defs = List.concat_map (fun (_, cunit) -> let open Lang in cunit.macro_defs) !cunits in
+  let all_channel_classes = List.concat_map (fun (_, cunit) -> let open Lang in cunit.channel_classes) cunits in
+  let all_type_defs = List.concat_map (fun (_, cunit) -> let open Lang in cunit.type_defs) cunits in
+  let all_procs = List.concat_map (fun (file_name, cunit) -> let open Lang in List.map (fun p -> (file_name, p)) cunit.procs) cunits in
+  let all_func_defs = List.concat_map (fun (_, cunit) -> let open Lang in cunit.func_defs) cunits in
+  let all_macro_defs = List.concat_map (fun (_, cunit) -> let open Lang in cunit.macro_defs) cunits in
   let proc_map = List.map (fun (file_name, proc) -> (let open Lang in (proc:proc_def).name, (proc, file_name))) all_procs
     |> Utils.StringMap.of_list in
   let sched = BuildScheduler.create () in
@@ -153,13 +157,16 @@ let compile out config =
       )
     )
   done;
+  graph_collection_queue
+
+let _codegen config out cunits graph_collection_queue =
   (* generate preamble *)
   Codegen.generate_preamble out;
   (* pull code from imported external files *)
   let visited_extern_files = ref Utils.StringSet.empty in
   let open Lang in
   List.iter (fun (file_name, cunit) ->
-    List.iter (fun {is_extern; file_name = imp_file_name} ->
+    List.iter (fun {is_extern; file_name = imp_file_name; span = _} ->
       if is_extern then
         let imp_file_name_canonical = canonicalise_file_name file_name imp_file_name in
         if Utils.StringSet.mem imp_file_name_canonical !visited_extern_files |> not then (
@@ -168,11 +175,25 @@ let compile out config =
           with Sys_error msg -> raise_compile_error (Some file_name) [Except.Text msg]
         )
     ) cunit.imports
-  ) !cunits;
+  ) cunits;
   (* generate the code from event graphs *)
   let all_collections = Queue.to_seq graph_collection_queue |> List.of_seq in
   let all_event_graphs = List.concat_map (fun collection -> let open EventGraph in collection.event_graphs) all_collections in
   List.iter (fun graphs ->
     Codegen.generate out config
      {graphs with EventGraph.external_event_graphs = all_event_graphs}) all_collections
+
+let parse config =
+  let cunits = _parse config in
+  let _ =
+    try let _ = _check config cunits in ()
+    with | CompileError _ -> ()
+  in
+  cunits
+
+let compile out config =
+  let cunits = _parse config in
+  let graph_collection_queue = _check config cunits in
+  _codegen config out cunits graph_collection_queue
+
 

@@ -274,9 +274,9 @@ let codegen_transition printer (_graphs : EventGraph.event_graph_collection) (g 
   print_line ~lvl_delta_post:1 "if (~rst_ni) begin";
   (* register reset *)
   Utils.StringMap.iter (
-    fun _ (r : Lang.reg_def) ->
+    fun _ (r : Lang.reg_def Lang.ast_node) ->
       let open CodegenFormat in
-      Printf.sprintf "%s <= '0;" (format_regname_current r.name) |> print_line
+      Printf.sprintf "%s <= '0;" (format_regname_current r.d.name) |> print_line
   ) owned_regs;
   List.iter (fun (_, sn) -> Printf.sprintf "%s_q <= '0;" sn |> print_line) reg_states;
   print_line ~lvl_delta_pre:(-1) ~lvl_delta_post:1 "end else begin";
@@ -444,9 +444,9 @@ let codegen_proc_states printer proc =
 
   Utils.StringMap.filter (fun name _ -> Utils.StringSet.mem name !owned_regs |> not) g.regs
   |> Utils.StringMap.iter (
-    fun _ (r : Lang.reg_def) ->
+    fun _ (r : Lang.reg_def Lang.ast_node) ->
       let open CodegenFormat in
-      Printf.sprintf "%s <= '0;" (format_regname_current r.name)
+      Printf.sprintf "%s <= '0;" (format_regname_current r.d.name)
         |> CodegenPrinter.print_line printer
   );
   CodegenPrinter.print_line ~lvl_delta_pre:(-1) ~lvl_delta_post:1 printer "end else begin";

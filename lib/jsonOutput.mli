@@ -23,20 +23,17 @@ type json_error = {
   description: json_fragment list;
 }
 
-type json_output = {
-  success: bool;
-  errors: json_error list;
-  output: string option;
-}
-
 (** Convert error message to JSON errors *)
 val error_message_to_json_errors : string -> Except.error_message -> json_error list
 
 (** Convert JSON output to string *)
-val json_output_to_string : json_output -> string
+val json_output_to_string : Yojson.Safe.t -> string
 
 (** Create successful JSON output *)
-val success_output : string -> json_output
+val transpiled_output : string -> Yojson.Safe.t
+
+(** Create AST output **)
+val ast_output : (string * Lang.compilation_unit) list -> Yojson.Safe.t
 
 (** Create failed JSON output *)
-val failure_output : json_error list -> json_output
+val failure_output : json_error list -> Yojson.Safe.t

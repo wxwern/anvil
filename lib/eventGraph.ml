@@ -174,7 +174,7 @@ and event_graph = {
   messages : MessageCollection.t; (** all messages referenceable from within the process,
             including those through channels passed from outside*)
   spawns : Lang.spawn_def list;
-  regs: Lang.reg_def Utils.string_map;
+  regs: Lang.reg_def Lang.ast_node Utils.string_map;
   mutable last_event_id: int;
   thread_codespan : Lang.code_span;
   mutable is_general_recursive : bool; (** is this a general recursive graph? *)

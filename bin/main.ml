@@ -12,12 +12,19 @@ let compile_with_json_output config =
   end else begin
     let temp_file = Filename.temp_file "anvil_output" ".sv" in
     try
+      if config.ast_output then
+        let cunits = Anvil.CompileDriver.parse config in
+        let json_result = Anvil.JsonOutput.ast_output cunits in
+        print_endline (Anvil.JsonOutput.json_output_to_string json_result);
+        exit 0
+      else ();
+
       let temp_out = open_out temp_file in
       (try
         Anvil.CompileDriver.compile temp_out config;
         close_out temp_out;
         let output_content = In_channel.with_open_text temp_file In_channel.input_all in
-        let json_result = Anvil.JsonOutput.success_output output_content in
+        let json_result = Anvil.JsonOutput.transpiled_output output_content in
         print_endline (Anvil.JsonOutput.json_output_to_string json_result)
       with
         | exn ->
@@ -30,7 +37,8 @@ let compile_with_json_output config =
       (try Sys.remove temp_file with _ -> ());
       let json_errors = Anvil.JsonOutput.error_message_to_json_errors "error" msg in
       let json_result = Anvil.JsonOutput.failure_output json_errors in
-      print_endline (Anvil.JsonOutput.json_output_to_string json_result)
+      print_endline (Anvil.JsonOutput.json_output_to_string json_result);
+      exit 1
   end
 
 let compile_with_normal_output config =
@@ -60,7 +68,7 @@ let compile_with_normal_output config =
 
 let () =
   let config = Anvil.Config.parse_args() in
-  if config.json_output then
+  if config.json_output || config.ast_output then
     compile_with_json_output config
   else
     compile_with_normal_output config

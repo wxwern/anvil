@@ -7,23 +7,86 @@ type code_span = {
   ed : Lexing.position; (** end of the span *)
 }
 
+let flatten_name_only_yojson_variant (v: [> Yojson.Safe.t ]) : Yojson.Safe.t =
+  match v with
+  | `List ( `String key::[] ) -> `String (String.lowercase_ascii key)
+  | _ -> assert false
+
+let to_assoc (v: [> Yojson.Safe.t ]) : Yojson.Safe.t as 'a =
+  let make_snake_case s =
+    let len = String.length s in
+    let buf = Buffer.create len in
+    String.iteri (fun i c ->
+      if Char.uppercase_ascii c = c && Char.lowercase_ascii c <> c then begin
+        if i > 0 then Buffer.add_char buf '_';
+        Buffer.add_char buf (Char.lowercase_ascii c)
+      end else
+        Buffer.add_char buf c
+    ) s;
+    Buffer.contents buf
+  in
+  match v with
+  | `List ( `String key::l ) ->
+    let t = make_snake_case key in (
+      match l with
+      | [] -> `Assoc [ ("type", `String t) ]
+      | x::[] -> `Assoc [ ("type", `String t); ("data", x) ]
+      | _ -> `Assoc [
+        ("type", `String t);
+        ("data", `List l)
+      ]
+    )
+  | `Assoc l -> `Assoc l
+  | x -> x
+
+let to_assoc_with_kind (k: string) (v: [> Yojson.Safe.t ]): Yojson.Safe.t as 'a = match (to_assoc v) with
+  | `Assoc l -> `Assoc (("kind", `String k) :: l)
+  | x -> `Assoc [ ("kind", `String k); ("data", x) ]
+
+let no_null_value_assoc (v: [> Yojson.Safe.t ]) : Yojson.Safe.t =
+  match v with
+  | `Assoc l -> `Assoc (List.filter (fun (_, value) -> value <> `Null) l)
+  | _ -> v
+
+let code_span_to_yojson (span : code_span) : Yojson.Safe.t =
+  let open Lexing in
+  let st = span.st in
+  let ed = span.ed in
+  `Assoc [
+    ("start",
+      `Assoc [ ("line", `Int st.pos_lnum); ("col", `Int (st.pos_cnum - st.pos_bol)) ]);
+    ("end",
+      `Assoc [ ("line", `Int ed.pos_lnum); ("col", `Int (ed.pos_cnum - ed.pos_bol)) ]);
+  ]
+
 (** A dummy code span that does not represent any valid span. *)
 let code_span_dummy = { st = Lexing.dummy_pos; ed = Lexing.dummy_pos }
 
 type 'a maybe_param = 'a ParamEnv.maybe_param
 
+let maybe_param_to_yojson (f : 'a -> Yojson.Safe.t) (p : 'a maybe_param) : Yojson.Safe.t =
+  match p with
+  | Param s -> `Assoc [("param", `String s)]
+  | Concrete v -> `Assoc [("concrete", f v)]
+
 type identifier = string
+[@@deriving to_yojson]
 
 (** A node in AST. Containing the data plus the code span info. *)
 type 'a ast_node = {
   span : code_span;
-  d : 'a;
+  mutable def_span : code_span list;
+  (** definition span, if applicable *)
+  d : 'a [@key "data"];
 }
+[@@deriving to_yojson]
+let ast_node_to_yojson x y =
+  ast_node_to_yojson x y |> to_assoc_with_kind "ast_node" |> no_null_value_assoc
 
 (** Construct an AST node with specified data and span. *)
-let ast_node_of_data st ed d = { span = {st; ed}; d }
-let tag_with_span s d = { span = s; d }
-let dummy_ast_node_of_data d = { span = code_span_dummy; d }
+let ast_node_of_data st ed d = { span = {st; ed}; def_span = []; d }
+let tag_with_span s d = { span = s; def_span = []; d }
+let dummy_ast_node_of_data d = { span = code_span_dummy; def_span = []; d }
 
 let data_of_ast_node n = n.d
 
@@ -31,12 +94,15 @@ let data_of_ast_node n = n.d
 type param_type =
   | IntParam (** an integer constant *)
   | TypeParam (** a type *)
+[@@deriving to_yojson]
 
 (** A compile-time parameter. *)
 type param = {
   param_name : identifier;
   param_ty : param_type;
 }
+[@@deriving to_yojson]
+let param_to_yojson x = to_assoc_with_kind "param" (param_to_yojson x)
 
 (** This identifies a message type within the context of a process.
 It consists of the {{!endpoint}endpoint name} and the {{!msg}message type name}.
@@ -45,6 +111,8 @@ type message_specifier = {
   endpoint : identifier;
   msg : identifier;
 }
+[@@deriving to_yojson]
+let message_specifier_to_yojson x = to_assoc_with_kind "message_specifier" (message_specifier_to_yojson x)
 
 let string_of_msg_spec (msg_spec : message_specifier) : string =
   msg_spec.endpoint ^ "::" ^ msg_spec.msg
@@ -55,10 +123,14 @@ type delay_pat = [
   | `Message of message_specifier (** sending/receiving of a message of a specific type *)
   | `Eternal (** matches no delays *)
 ]
+[@@deriving to_yojson]
+let delay_pat_to_yojson x = to_assoc_with_kind "delay_pat" (delay_pat_to_yojson x)
 
 (** A delay pattern local to a specific channel. Being channel-local means that the message type
 does not include an endpoint name component. *)
 type delay_pat_chan_local = [ `Cycles of int | `Message of identifier | `Eternal ]
+[@@deriving to_yojson]
+let delay_pat_chan_local_to_yojson x = to_assoc_with_kind "delay_pat_chan_local" (delay_pat_chan_local_to_yojson x)
 
 let string_of_delay_pat (t : delay_pat) : string =
   match t with
@@ -68,9 +140,11 @@ let string_of_delay_pat (t : delay_pat) : string =
 
 (** Lifetime signature, specifying that the lifetime lasts until matching {{!sig_lifetime.e}ending} delay patterns. *)
 type sig_lifetime = { e: delay_pat; }
+[@@deriving to_yojson]
 
 (** Same as {!sig_lifetime} but local to a channel. *)
 type sig_lifetime_chan_local = { e: delay_pat_chan_local; }
+[@@deriving to_yojson]
 
 let string_of_lifetime (lt : sig_lifetime) : string =
   Printf.sprintf "%s" (string_of_delay_pat lt.e)
@@ -90,6 +164,8 @@ let sig_lifetime_const : sig_lifetime =
 
 (** Direction of an endpoint. *)
 type endpoint_direction = Left | Right
+[@@deriving to_yojson]
+let endpoint_direction_to_yojson x = flatten_name_only_yojson_variant (endpoint_direction_to_yojson x)
 
 (** A data type. *)
 type data_type = [
@@ -108,6 +184,42 @@ and param_value =
   | IntParamValue of int
   | TypeParamValue of data_type
 
+let rec data_type_to_yojson x = match x with
+  | `Logic -> `Assoc [ ("type", `String "logic") ]
+  | `Array (dtype, size) -> `Assoc [
+      ("type", `String "array");
+      ("element_type", data_type_to_yojson dtype);
+      ("size", maybe_param_to_yojson (fun s -> `Int s) size)
+    ]
+  | `Variant vlist -> `Assoc [
+      ("type", `String "variant");
+      ("constructors", `List (List.map (fun (id, dtype_opt) ->
+        match dtype_opt with
+        | None -> `Assoc [ ("name", `String id); ("data", `Null) ]
+        | Some dt -> `Assoc [ ("name", `String id); ("data", data_type_to_yojson dt) ]
+      ) vlist))
+    ]
+  | `Record rlist -> `Assoc [
+      ("type", `String "record");
+      ("fields", `List (List.map (fun (id, dtype) ->
+        `Assoc [ ("name", `String id); ("data", data_type_to_yojson dtype) ]
+      ) rlist))
+    ]
+  | `Tuple tlist -> `Assoc [
+      ("type", `String "tuple");
+      ("elements", `List (List.map data_type_to_yojson tlist))
+    ]
+  | `Opaque id -> `Assoc [ ("type", `String "opaque"); ("name", `String id) ]
+  | `Named (id, params) -> `Assoc [
+      ("type", `String "named");
+      ("name", `String id);
+      ("params", `List (List.map param_value_to_yojson params))
+    ]
+  (* | `Endpoint edef -> `Assoc [ ("type", `String "endpoint"); ("data", endpoint_def_to_yojson edef) ] *)
+and param_value_to_yojson x = match x with
+  | IntParamValue n -> `Assoc [ ("type", `String "int"); ("value", `Int n) ]
+  | TypeParamValue dt -> `Assoc [ ("type", `String "type"); ("value", data_type_to_yojson dt) ]
+
 (** Endpoint definition. A pair is
 created once a channel class
 is instantiated. *)
@@ -122,18 +234,26 @@ type endpoint_def = {
   opp: identifier option; (** if the endpoint is created locally, the other endpoint associated
   with the same channel *)
 }
+[@@deriving to_yojson]
+let endpoint_def_to_yojson x = to_assoc_with_kind "endpoint_def" (endpoint_def_to_yojson x)
 
 type macro_def = {
   id: identifier;
   value : int;
+  span: code_span;
 }
+[@@deriving to_yojson]
+let macro_def_to_yojson x = to_assoc_with_kind "macro_def" (macro_def_to_yojson x)
 
 (** A type definition ([type name = body])*)
-and type_def = {
+type type_def = {
   name: identifier;
   body: data_type;
   params: param list; (** list of parameters *)
+  span: code_span; (** code span of the type definition *)
 }
+[@@deriving to_yojson]
+let type_def_to_yojson x = to_assoc_with_kind "type_def" (type_def_to_yojson x)
 
 (** Unit type. Basically an empty tuple. *)
 let unit_dtype = `Tuple []
@@ -166,12 +286,17 @@ type 'a sig_type_general = {
   dtype: data_type;
   lifetime: 'a;
 }
+[@@deriving to_yojson]
 
 (** Signal type, including both data type and the lifetime signature. *)
 type sig_type = sig_lifetime sig_type_general
+[@@deriving to_yojson]
+let sig_type_to_yojson x = to_assoc_with_kind "sig_type" (sig_type_to_yojson x)
 
 (** Same as {!sig_type} but local to a channel. *)
 type sig_type_chan_local = sig_lifetime_chan_local sig_type_general
+[@@deriving to_yojson]
+let sig_type_chan_local_to_yojson x = to_assoc_with_kind "sig_type_chan_local" (sig_type_chan_local_to_yojson x)
 
 (** Convert a channel-local delay pattern to a global (process context) delay pattern. *)
 let delay_pat_globalise (endpoint : identifier) (t : delay_pat_chan_local) : delay_pat =
@@ -197,16 +322,34 @@ type reg_def = {
   dtype: data_type;
   init: string option;
 }
+[@@deriving to_yojson]
+let reg_def_to_yojson x = to_assoc_with_kind "reg_def" (reg_def_to_yojson x)
 
 type reg_def_list = reg_def list
 
-type message_direction = Inp | Out
+type message_direction = Inp [@name "in"] | Out [@name "out"]
+[@@deriving to_yojson]
+let message_direction_to_yojson x = flatten_name_only_yojson_variant (message_direction_to_yojson x)
 
 (** Synchronisation mode of a message type. *)
 type message_sync_mode =
   | Dynamic (** dynamic synchronisation, e.g., through [valid]/[ack] handshakes *)
   | Static of int * int (** (init offset, static interval) *)
   | Dependent of string * int (** relative to another message (msg, delay) **)
+[@@deriving to_yojson]
+let message_sync_mode_to_yojson x = match x with
+  | Dynamic -> `Assoc [ ("type", `String "dynamic") ]
+  | Static (init, interval) -> `Assoc [
+      ("type", `String "static");
+      ("init", `Int init);
+      ("interval", `Int interval)
+    ]
+  | Dependent (msg, delay) -> `Assoc [
+      ("type", `String "dependent");
+      ("msg", `String msg);
+      ("delay", `Int delay)
+    ]
+  |> to_assoc_with_kind "message_sync_mode"
 
 (** A message type definition, as part of a channel definition. *)
 type message_def = {
@@ -217,6 +360,8 @@ type message_def = {
   sig_types: sig_type_chan_local list; (** the signal types of the values carried in the message *)
   span: code_span; (** code span of the message definition *)
 }
+[@@deriving to_yojson]
+let message_def_to_yojson x = to_assoc_with_kind "message_def" (message_def_to_yojson x)
 
 (** A channel class definition, containing a list of message type definitions. *)
 type channel_class_def = {
@@ -225,12 +370,16 @@ type channel_class_def = {
   params: param list;  (** List of generic parameters *)
   span: code_span; (** code span of the channel class definition *)
 }
+[@@deriving to_yojson]
+let channel_class_def_to_yojson x = to_assoc_with_kind "channel_class_def" (channel_class_def_to_yojson x)
 
 (** The visibility of a channel. *)
 type channel_visibility =
 | BothForeign (** not visible locally, must be passed to other processes *)
 | LeftForeign (** the left endpoint is not visible locally but the right one is *)
 | RightForeign (** the right endpoint is not visible locally but the left one is *)
+[@@deriving to_yojson]
+let channel_visibility_to_yojson x = flatten_name_only_yojson_variant (channel_visibility_to_yojson x)
 
 (** A channel (instantiation of a channel class) definition. *)
 type channel_def = {
@@ -240,6 +389,8 @@ type channel_def = {
   endpoint_right: identifier;
   visibility: channel_visibility;
 }
+[@@deriving to_yojson]
+let channel_def_to_yojson x = to_assoc_with_kind "channel_def" (channel_def_to_yojson x)
 
 (* expressions *)
 
@@ -287,12 +438,43 @@ let value_of_digit d : int =
   | `Ze -> 0xe
   | `Zf -> 0xf
 
+let bit_to_yojson x = `Int (value_of_digit x)
+let digit_to_yojson x = `Int (value_of_digit x)
+let hexit_to_yojson x = `Int (value_of_digit x)
+let all_digit_to_yojson x = `Int (value_of_digit x)
+
 type literal =
 | Binary of int * bit list
 | Decimal of int * digit list
 | Hexadecimal of int * hexit list
 | WithLength of int * int
 | NoLength of int
+let literal_to_yojson x = match x with
+  | Binary (n, bits) -> `Assoc [
+      ("type", `String "binary");
+      ("length", `Int n);
+      ("digits", `List (List.map bit_to_yojson bits))
+    ]
+  | Decimal (n, digits) -> `Assoc [
+      ("type", `String "decimal");
+      ("length", `Int n);
+      ("digits", `List (List.map digit_to_yojson digits))
+    ]
+  | Hexadecimal (n, hexits) -> `Assoc [
+      ("type", `String "hexadecimal");
+      ("length", `Int n);
+      ("digits", `List (List.map hexit_to_yojson hexits))
+    ]
+  | WithLength (n, v) -> `Assoc [
+      ("type", `String "with_length");
+      ("length", `Int n);
+      ("value", `Int v)
+    ]
+  | NoLength v -> `Assoc [
+      ("type", `String "no_length");
+      ("value", `Int v)
+    ]
+  |> to_assoc_with_kind "literal"
 
 let literal_bit_len (lit : literal) : int option =
   match lit with
@@ -316,7 +498,9 @@ let dtype_of_literal (lit : literal) =
 
 type binop = Add | Sub | Xor | And | Or | Lt | Gt | Lte | Gte |
              Shl | Shr | Eq | Neq | Mul | In | LAnd | LOr
+[@@deriving to_yojson]
 type unop  = Neg | Not | AndAll | OrAll
+[@@deriving to_yojson]
 
 (* TODO: these are SV-specific; move elsewhere *)
 let string_of_binop (binop: binop) : string =
@@ -350,13 +534,14 @@ type 'a singleton_or_list = [
   | `Single of 'a
   | `List of 'a list
 ]
+[@@deriving to_yojson]
+let singleton_or_list_to_yojson f x = to_assoc (singleton_or_list_to_yojson f x)
 
 (** Information specified in a message send operation. *)
 type send_pack = {
   send_msg_spec: message_specifier;
   send_data: expr_node;
 }
-
 (** Information specified in a message receive operation. *)
 and recv_pack = {
   recv_msg_spec: message_specifier;
@@ -417,6 +602,205 @@ and debug_op =
   | DebugPrint of string * expr_node list
   | DebugFinish
 
+let rec send_pack_to_yojson (sp: send_pack) : Yojson.Safe.t =
+  `Assoc [
+    ("msg_spec", message_specifier_to_yojson sp.send_msg_spec);
+    ("data", expr_node_to_yojson sp.send_data)
+  ]
+and recv_pack_to_yojson (rp: recv_pack) : Yojson.Safe.t =
+  `Assoc [
+    ("msg_spec", message_specifier_to_yojson rp.recv_msg_spec)
+  ]
+and constructor_spec_to_yojson (cs: constructor_spec) : Yojson.Safe.t =
+  `Assoc [
+    ("type_name", identifier_to_yojson cs.variant_ty_name);
+    ("constructor", identifier_to_yojson cs.variant)
+  ]
+and expr_to_yojson x = let result = match x with
+  | Literal v -> `Assoc [ ("type", `String "literal"); ("value", literal_to_yojson v) ]
+  | Identifier id -> `Assoc [ ("type", `String "identifier"); ("id", identifier_to_yojson id) ]
+  | Call (f, args) -> `Assoc [
+      ("type", `String "Call");
+      ("function", identifier_to_yojson f);
+      ("args", `List (List.map expr_node_to_yojson args))
+    ]
+  | Assign (lv, e) -> `Assoc [
+      ("type", `String "assign");
+      ("lvalue", lvalue_to_yojson lv);
+      ("expr", expr_node_to_yojson e)
+    ]
+  | Binop (op, e1, e2) -> `Assoc [
+      ("type", `String "binop");
+      ("op", binop_to_yojson op);
+      ("lhs", expr_node_to_yojson e1);
+      ("rhs", singleton_or_list_to_yojson expr_node_to_yojson e2)
+    ]
+  | Unop (op, e) -> `Assoc [
+      ("type", `String "unop");
+      ("op", unop_to_yojson op);
+      ("expr", expr_node_to_yojson e)
+    ]
+  | Tuple elist -> `Assoc [
+      ("type", `String "tuple");
+      ("elements", `List (List.map expr_node_to_yojson elist))
+    ]
+  | Let (ids, e) -> `Assoc [
+      ("type", `String "let");
+      ("ids", `List (List.map identifier_to_yojson ids));
+      ("expr", expr_node_to_yojson e)
+    ]
+  | Join (e1, e2) -> `Assoc [
+      ("type", `String "join");
+      ("lhs", expr_node_to_yojson e1);
+      ("rhs", expr_node_to_yojson e2)
+    ]
+  | Wait (e1, e2) -> `Assoc [
+      ("type", `String "wait");
+      ("lhs", expr_node_to_yojson e1);
+      ("rhs", expr_node_to_yojson e2)
+    ]
+  | Cycle n -> `Assoc [
+      ("type", `String "cycle");
+      ("cycles", `Int n)
+    ]
+  | Sync id -> `Assoc [
+      ("type", `String "sync");
+      ("id", identifier_to_yojson id)
+    ]
+  | IfExpr (cond, then_br, else_br) -> `Assoc [
+      ("type", `String "if_expr");
+      ("cond", expr_node_to_yojson cond);
+      ("then", expr_node_to_yojson then_br);
+      ("else", expr_node_to_yojson else_br)
+    ]
+  | TryRecv (id, rp, then_br, else_br) -> `Assoc [
+      ("type", `String "try_recv");
+      ("id", identifier_to_yojson id);
+      ("recv_pack", recv_pack_to_yojson rp);
+      ("then", expr_node_to_yojson then_br);
+      ("else", expr_node_to_yojson else_br)
+    ]
+  | TrySend (sp, then_br, else_br) -> `Assoc [
+      ("type", `String "try_send");
+      ("send_pack", send_pack_to_yojson sp);
+      ("then", expr_node_to_yojson then_br);
+      ("else", expr_node_to_yojson else_br)
+    ]
+  | Construct (cs, eo) -> `Assoc [
+      ("type", `String "construct");
+      ("constructor_spec", constructor_spec_to_yojson cs);
+      ("arg", (match eo with Some e -> expr_node_to_yojson e | None -> `Null))
+    ]
+  | Record (ty_name, fields, eo) -> `Assoc [
+      ("type", `String "record");
+      ("type_name", identifier_to_yojson ty_name);
+      ("fields", `List (List.map (fun (id, e) ->
+          `Assoc [ ("field", identifier_to_yojson id); ("value", expr_node_to_yojson e) ]) fields));
+      ("base", (match eo with Some e -> expr_node_to_yojson e | None -> `Null))
+    ]
+  | Index (e, idx) -> `Assoc [
+      ("type", `String "index");
+      ("expr", expr_node_to_yojson e);
+      ("index", index_to_yojson idx)
+    ]
+  | Indirect (e, field) -> `Assoc [
+      ("type", `String "indirect");
+      ("expr", expr_node_to_yojson e);
+      ("field", identifier_to_yojson field)
+    ]
+  | Concat elist -> `Assoc [
+      ("type", `String "concat");
+      ("elements", `List (List.map expr_node_to_yojson elist))
+    ]
+  | Ready msg_spec -> `Assoc [
+      ("type", `String "ready");
+      ("msg_spec", message_specifier_to_yojson msg_spec)
+    ]
+  | Probe msg_spec -> `Assoc [
+      ("type", `String "probe");
+      ("msg_spec", message_specifier_to_yojson msg_spec)
+    ]
+  | Match (e, branches) -> `Assoc [
+      ("type", `String "match");
+      ("expr", expr_node_to_yojson e);
+      ("branches", `List (List.map (fun (pat, br) ->
+          `Assoc [
+            ("pattern", expr_node_to_yojson pat);
+            ("branch", (match br with Some b -> expr_node_to_yojson b | None -> `Null))
+          ]) branches))
+    ]
+  | Read id -> `Assoc [
+      ("type", `String "read");
+      ("id", identifier_to_yojson id)
+    ]
+  | Debug op -> `Assoc [
+      ("type", `String "debug");
+      ("op", debug_op_to_yojson op)
+    ]
+  | Send sp -> `Assoc [
+      ("type", `String "send");
+      ("send_pack", send_pack_to_yojson sp)
+    ]
+  | Recv rp -> `Assoc [
+      ("type", `String "recv");
+      ("recv_pack", recv_pack_to_yojson rp)
+    ]
+  | SharedAssign (id, e) -> `Assoc [
+      ("type", `String "shared_assign");
+      ("id", identifier_to_yojson id);
+      ("expr", expr_node_to_yojson e)
+    ]
+  | List elist -> `Assoc [
+      ("type", `String "list");
+      ("elements", `List (List.map expr_node_to_yojson elist))
+    ]
+  | Recurse -> `Assoc [ ("type", `String "recurse") ]
+  in to_assoc_with_kind "expr" result
+and expr_node_to_yojson x =
+  if List.is_empty x.def_span then `Assoc [
+      ("kind", `String "expr_node");
+      ("span", code_span_to_yojson x.span);
+      ("data", expr_to_yojson x.d)
+    ]
+  else `Assoc [
+      ("kind", `String "expr_node");
+      ("span", code_span_to_yojson x.span);
+      ("def_span", `List (List.map code_span_to_yojson x.def_span));
+      ("data", expr_to_yojson x.d)
+  ]
+and lvalue_to_yojson x = let result = match x with
+  | Reg id -> `Assoc [ ("type", `String "reg"); ("id", identifier_to_yojson id) ]
+  | Indexed (lv, idx) -> `Assoc [
+      ("type", `String "indexed");
+      ("lvalue", lvalue_to_yojson lv);
+      ("index", index_to_yojson idx)
+    ]
+  | Indirected (lv, field) -> `Assoc [
+      ("type", `String "indirected");
+      ("lvalue", lvalue_to_yojson lv);
+      ("field", identifier_to_yojson field)
+    ]
+  in to_assoc_with_kind "lvalue" result
+and index_to_yojson x = let result = match x with
+  | Single e -> `Assoc [
+      ("type", `String "single");
+      ("expr", expr_node_to_yojson e)
+    ]
+  | Range (e1, e2) -> `Assoc [
+      ("type", `String "range");
+      ("start", expr_node_to_yojson e1);
+      ("size", expr_node_to_yojson e2)
+    ]
+  in to_assoc_with_kind "index" result
+and debug_op_to_yojson x = let result = match x with
+  | DebugPrint (s, elist) -> `Assoc [
+      ("type", `String "debug_print");
+      ("msg", `String s);
+      ("args", `List (List.map expr_node_to_yojson elist))
+    ]
+  | DebugFinish -> `Assoc [ ("type", `String "debug_finish") ]
+  in to_assoc_with_kind "debug_op" result
+
 let delay_immediate = `Cycles 0
 let delay_single_cycle = `Cycles 1
 
@@ -424,11 +808,15 @@ type sig_def = {
   name: identifier;
   stype: sig_type;
 }
+[@@deriving to_yojson]
+let sig_def_to_yojson x = to_assoc_with_kind "sig_def" (sig_def_to_yojson x)
 
 type cycle_proc = {
   trans_func: expr_node;
   sigs: sig_def list;
 }
+[@@deriving to_yojson]
+let cycle_proc_to_yojson x = to_assoc_with_kind "cycle_proc" (cycle_proc_to_yojson x)
 
 (** A spawn of a process. *)
 type spawn_def = {
@@ -438,6 +826,8 @@ type spawn_def = {
   params: identifier list; (** names of the endpoints passed to the spawned process *)
   compile_params: param_value list; (** concrete param value list *)
 }
+[@@deriving to_yojson]
+let spawn_def_to_yojson x = to_assoc_with_kind "spawn_def" (spawn_def_to_yojson x)
 
 (* TODO: specify the type? *)
 type shared_var_def = {
@@ -445,6 +835,8 @@ type shared_var_def = {
   assigning_thread: int;
   shared_lifetime: sig_lifetime;
 }
+[@@deriving to_yojson]
+let shared_var_def_to_yojson x = to_assoc_with_kind "shared_var_def" (shared_var_def_to_yojson x)
 
 (** Process body. *)
 type proc_def_body = {
@@ -457,6 +849,7 @@ type proc_def_body = {
   (* prog: expr; *)
   threads: expr_node list;
 }
+[@@deriving to_yojson]
 
 (** Extern process definition *)
 type proc_def_body_extern = {
@@ -464,10 +857,13 @@ type proc_def_body_extern = {
   msg_ports : (message_specifier * string option * string option * string option) list;
   (** data, valid, and ack ports *)
 }
+[@@deriving to_yojson]
 
 type proc_def_body_maybe_extern =
   | Native of proc_def_body
   | Extern of string * proc_def_body_extern (** module name and port bindings *)
+[@@deriving to_yojson]
+let proc_def_body_maybe_extern_to_yojson x = to_assoc (proc_def_body_maybe_extern_to_yojson x)
 
 (** Process definition. *)
 type proc_def = {
@@ -476,19 +872,29 @@ type proc_def = {
   args: endpoint_def ast_node list; (** endpoints passed from outside *)
   body: proc_def_body_maybe_extern; (** process body *)
   params: param list; (** compile-time parameters *)
+  span: code_span; (** code span of the process definition *)
 }
+[@@deriving to_yojson]
+let proc_def_to_yojson x = to_assoc_with_kind "proc_def" (proc_def_to_yojson x)
 
 (** An import directive for importing code from other files. *)
 type import_directive = {
   file_name : string;
   is_extern : bool; (** is this import external?
       Currently an external import means importing SystemVerilog code *)
+  span: code_span;
 }
+[@@deriving to_yojson]
+let import_directive_to_yojson x = to_assoc_with_kind "import_directive" (import_directive_to_yojson x)
+
 type func_def =  {
   name: identifier;
   args: identifier list;
   body: expr_node;
+  span: code_span;
 }
+[@@deriving to_yojson]
+let func_def_to_yojson x = to_assoc_with_kind "func_def" (func_def_to_yojson x)
 
 (** A compilation unit, corresponding to a source file. *)
 type compilation_unit = {
@@ -501,6 +907,7 @@ type compilation_unit = {
   imports : import_directive list;
   _extern_procs : proc_def list; (** processes that are external, usable but not built *)
 }
+[@@deriving to_yojson]
 
 let cunit_empty : compilation_unit =
   {cunit_file_name = None; channel_classes = []; type_defs = [];

@@ -5,6 +5,7 @@ type compile_config = {
   opt_level : int;
   two_round_graph: bool;
   json_output: bool;
+  ast_output: bool;
   input_filenames: string list;
 }
 
@@ -15,6 +16,7 @@ let parse_args () : compile_config =
   and opt_level = ref 2
   and two_round_graph = ref false
   and json_output = ref false
+  and ast_output = ref false
   and input_filenames = ref [] in
   let add_input_filename s =
     input_filenames := s::!input_filenames
@@ -26,7 +28,8 @@ let parse_args () : compile_config =
       ("-disable-lt-checks", Arg.Set disable_lt_checks, "Disable lifetime/borrow-related checks");
       ("-O", Arg.Set_int opt_level, "Set optimisation level: 0, 1, 2 (default)");
       ("-two-round", Arg.Set two_round_graph, "Enable codegen of logic for two rounds");
-      ("-json", Arg.Set json_output, "Output compilation results in JSON format")
+      ("-json", Arg.Set json_output, "Output compilation results in JSON format");
+      ("-ast", Arg.Set ast_output, "Output parsed AST in JSON format");
     ]
     add_input_filename
     "anvil [-stdin] [-verbose] [-disable-lt-checks] [-O <opt-level>] [-two-round] [-json] <file1> [<file2>] ...";
@@ -37,6 +40,7 @@ let parse_args () : compile_config =
     opt_level = !opt_level;
     two_round_graph = !two_round_graph;
     json_output = !json_output;
+    ast_output = !ast_output;
     input_filenames = !input_filenames;
   }
 

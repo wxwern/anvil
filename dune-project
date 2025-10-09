@@ -24,11 +24,14 @@
   (dune (>= 3.8))
   menhir
   yojson
+  ppx_deriving_yojson
  )
  (tags
   (hdl safety fpga))
  (version 0.1.0))
 
 (using menhir 2.1)
+
+
 
 ; See the complete stanza docs at https://dune.readthedocs.io/en/stable/dune-files.html#dune-project
