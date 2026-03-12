@@ -41,8 +41,8 @@ module Typing = struct
       in
       let new_preds = Utils.IntSet.add (g.last_event_id + 1) new_preds in
       let n = {actions = []; sustained_actions = []; source; id = g.last_event_id + 1;
-        is_recurse = false;
-        outs = []; graph = g; preds = new_preds; removed = false } in
+        is_recurse = false; merged_ids = []; expr_nodes = [];
+        outs = []; graph = g; preds = new_preds; removed = false} in
       g.events <- n::g.events;
       g.last_event_id <- n.id;
       n

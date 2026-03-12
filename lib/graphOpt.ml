@@ -128,7 +128,7 @@ module CombSimplPass = struct
     assert (Dynarray.length event_ufs = n);
     let add_event source =
       let new_ev = {actions = []; sustained_actions = []; source; id = graph.last_event_id + 1;
-        is_recurse = false;
+        is_recurse = false; merged_ids = []; expr_nodes = [];
         outs = []; graph; preds = Utils.IntSet.empty; removed = false } in
       graph.last_event_id <- new_ev.id;
       graph.events <- new_ev::graph.events;
@@ -485,7 +485,9 @@ module CombSimplPass = struct
           let ev_f = event_arr_old.(f) in
           ev_f.actions <- Utils.list_unordered_join ev_f.actions actions;
           ev_f.sustained_actions <- Utils.list_unordered_join ev_f.sustained_actions sustained_actions;
-          ev_f.is_recurse <- ev_f.is_recurse || ev.is_recurse (* maintain recurse event *)
+          ev_f.is_recurse <- ev_f.is_recurse || ev.is_recurse (* maintain recurse event *);
+          ev_f.merged_ids <- old_id :: ev_f.merged_ids;
+          ev_f.expr_nodes <- Utils.list_unordered_join ev_f.expr_nodes ev.expr_nodes
         )
       in
       List.iter2 (fun e_new e_old -> assert to_keep.(e_old.id); merge_event e_old.id e_new) events_to_keep events_to_keep_old; (* merge events to keep first *)

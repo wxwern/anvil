@@ -5,7 +5,7 @@ open ErrorCollector
 
 let string_of_lt (lt : lifetime) : string =
   String.concat "" (List.map (fun s ->
-      Printf.sprintf "%d |> %s | " (fst s).id (string_of_delay_pat (snd s))
+      Printf.sprintf "E%d |> %s | " (fst s).id (string_of_delay_pat (snd s))
     ) lt.dead)
 
 (** Check if the uses of endpoints and registers follow defined order. *)

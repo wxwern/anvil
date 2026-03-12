@@ -120,6 +120,7 @@ let _check config cunits =
           ErrorCollector.map_collected_errors (fun e ->
             convert_intermediate_anvil_errors e (Some file_name)
           );
+          AstAnnotator.attach_all_events graph_collection;
           Queue.add graph_collection graph_collection_queue
       )
     )

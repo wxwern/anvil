@@ -173,6 +173,10 @@ let attach_def_from_top_level_type_with_fields (target : 'a Lang.ast_node) (sour
 
 
 (** Event helpers **)
+(**
+   These methods are used to attach event information to AST nodes.
+   They are useful info regarding lifetimes of statements and estimated clock cycles they execute in.
+  *)
 
 (** attaches event information to the target (1st arg) from the source (2nd arg), optionally sustained until the given event (3rd arg) *)
 let attach_event (target : 'a Lang.ast_node) (source : EventGraph.event) (sustained_until : EventGraph.event option) =
@@ -182,4 +186,60 @@ let attach_event (target : 'a Lang.ast_node) (source : EventGraph.event) (sustai
     source.graph.thread_id,
     source.id,
     Option.map (fun (e: EventGraph.event) -> e.id) sustained_until
-  )
+  );
+  source.expr_nodes <- target :: source.expr_nodes
+
+
+(** attaches all events in the graph collection to the correct AST nodes (also in the collection),
+    which may be required after event-optimization passes that merge events together *)
+let attach_all_events (graph_collection : EventGraph.event_graph_collection) =
+  if not !enabled then () else
+
+  let graphs = graph_collection.event_graphs in
+  List.iter (fun (graph: EventGraph.proc_graph) ->
+    List.iter (fun ((thread, _) : EventGraph.event_graph * 'a option) ->
+      let eid_mappings: (int * int) list ref = ref [] in
+
+      List.iter (fun (event: EventGraph.event) ->
+        let eid = event.id in
+        List.iter (fun (merge_in_eid: int) ->
+          eid_mappings := (merge_in_eid, eid) ::
+            (List.remove_assoc merge_in_eid !eid_mappings);
+        ) event.merged_ids
+      ) thread.events;
+
+      (* update event ids *)
+      List.iter (fun (event: EventGraph.event) ->
+        List.iter (fun (node: 'c Lang.ast_node) ->
+          let ae = node.action_event in
+          match ae with
+          | None -> ()
+          | Some (_, prev_eid, ueid) ->
+            (* update event id *)
+            if prev_eid <> event.id then
+              eid_mappings := (prev_eid, event.id) :: (List.remove_assoc prev_eid !eid_mappings);
+              node.action_event <- Some (thread.thread_id, event.id, ueid)
+        ) event.expr_nodes
+      ) thread.events;
+
+      List.iter (fun (event: EventGraph.event) ->
+        List.iter (fun (node: 'c Lang.ast_node) ->
+          let ae = node.action_event in
+          match ae with
+          | None -> ()
+          | Some (tid, eid, ueid) ->
+            (* update until event id *)
+            match ueid with
+            | None -> ()
+            | Some ueid ->
+              let new_ueid = List.assoc_opt ueid !eid_mappings in
+              Option.iter (fun new_ueid -> node.action_event <- Some (tid, eid, Some new_ueid)) new_ueid
+
+        ) event.expr_nodes
+      ) thread.events
+
+    ) graph.threads
+  ) graphs
+
+
+

@@ -130,6 +130,7 @@ let build_proc (config : Config.compile_config) sched module_name param_values
           comb = false;
         } in
         let g = build_thread config ci shared_vars_info GraphBuilder.construct_graphIR graph e in
+        GraphAnalysis.events_prepare_outs g.events;
         (g, reset_by)
       ) body.threads in
       {name = module_name; extern_module = None;
